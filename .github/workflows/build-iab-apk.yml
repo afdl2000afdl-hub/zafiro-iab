@@ -71,38 +71,62 @@ jobs:
 
       - name: Publish report to repo
         if: always()
-        run: |
-          set +e
-          cd /tmp/zafiro-src
-          REPORT="$GITHUB_WORKSPACE/build-report.txt"
-          {
-            echo "=== apk find ==="
-            find app/build -name "*.apk" 2>/dev/null || echo "NO APK under app/build"
-            echo "=== outputs dir ==="
-            ls -lR app/build/outputs 2>/dev/null | head -80 || echo "no outputs dir"
-            echo "=== gradle tail (last 120 lines) ==="
-            tail -120 build-output.log 2>/dev/null || echo "no log"
-          } > "$REPORT"
-          echo "=== report preview ==="
-          head -30 "$REPORT"
-
-          TOKEN="$GITHUB_TOKEN"
-          REPO="afdl2000afdl-hub/zafiro-iab"
-          B64="$(base64 -w0 "$REPORT")"
-          SHA="$(curl -s -H "Authorization: token $TOKEN" -H "Accept: application/vnd.github+json" \
-                "https://api.github.com/repos/$REPO/contents/build-report.txt" \
-                | grep -o '"sha":"[^"]*"' | head -1 | cut -d'"' -f4)"
-          if [ -n "$SHA" ]; then
-            printf '{"message":"ci: build report","content":"%s","encoding":"base64","sha":"%s"}' "$B64" "$SHA" > /tmp/report.json
-          else
-            printf '{"message":"ci: build report","content":"%s","encoding":"base64"}' "$B64" > /tmp/report.json
-          fi
-          curl -s -X PUT -H "Authorization: token $TOKEN" -H "Content-Type: application/json" \
-               --data-binary @/tmp/report.json \
-               "https://api.github.com/repos/$REPO/contents/build-report.txt" \
-               -o /tmp/put.json -w "put_report_http=%{http_code}\n"
-          echo "--- put response ---"
-          head -c 300 /tmp/put.json; echo
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const path = require('path');
+            const src = '/tmp/zafiro-src';
+            const reportPath = path.join(process.env.GITHUB_WORKSPACE, 'build-report.txt');
+            let apkFind = '';
+            let outputsDir = '';
+            let gradleTail = '';
+            try {
+              const { execSync } = require('child_process');
+              apkFind = execSync(`find ${src}/app/build -name "*.apk" 2>/dev/null || echo "NO APK under app/build"`, { shell: 'bash' }).toString();
+              outputsDir = execSync(`ls -lR ${src}/app/build/outputs 2>/dev/null | head -80 || echo "no outputs dir"`, { shell: 'bash' }).toString();
+              gradleTail = fs.existsSync(`${src}/build-output.log`)
+                ? fs.readFileSync(`${src}/build-output.log`, 'utf8').split('\n').slice(-120).join('\n')
+                : 'no log';
+            } catch (e) {
+              gradleTail += '\nreport-step-error: ' + e.message;
+            }
+            const report = '=== apk find ===\n' + apkFind +
+                           '\n=== outputs dir ===\n' + outputsDir +
+                           '\n=== gradle tail (last 120 lines) ===\n' + gradleTail + '\n';
+            fs.writeFileSync(reportPath, report);
+            console.log(report.slice(0, 1500));
+            // Create/update build-report.txt in the repo via Octokit (context.token)
+            const core = await github.rest;
+            try {
+              const { data: existing } = await core.repos.getContent({
+                owner: context.repo.owner, repo: context.repo.repo,
+                path: 'build-report.txt',
+              });
+              const res = await core.repos.createOrUpdateFileContents({
+                owner: context.repo.owner, repo: context.repo.repo,
+                path: 'build-report.txt',
+                message: 'ci: build report',
+                content: Buffer.from(report, 'utf8').toString('base64'),
+                encoding: 'base64',
+                sha: existing.sha,
+              });
+              console.log('report committed:', res.data.commit.sha);
+            } catch (e) {
+              // if 404 (no existing), create without sha
+              if (e.response && e.response.status === 404) {
+                const res = await core.repos.createOrUpdateFileContents({
+                  owner: context.repo.owner, repo: context.repo.repo,
+                  path: 'build-report.txt',
+                  message: 'ci: build report',
+                  content: Buffer.from(report, 'utf8').toString('base64'),
+                  encoding: 'base64',
+                });
+                console.log('report created:', res.data.commit.sha);
+              } else {
+                console.error('report commit failed:', e.response ? e.response.status : e.message);
+              }
+            }
 
       - name: Upload build log artifact
         if: always()
