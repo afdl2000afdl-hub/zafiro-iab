@@ -11,6 +11,7 @@ permissions:
 env:
   ANDROID_SDK_ROOT: /usr/lib/android-sdk
   ANDROID_HOME: /usr/lib/android-sdk
+  ANDROID_SDK_HOME: /usr/lib/android-sdk
 
 jobs:
   build-debug-apk:
@@ -34,24 +35,27 @@ jobs:
 
       - name: Diagnose Android SDK layout
         run: |
+          set +e
           echo "ANDROID_HOME=$ANDROID_HOME"
           ls -la $ANDROID_HOME 2>/dev/null || echo "SDK root missing"
           ls -la $ANDROID_HOME/cmdline-tools 2>/dev/null || echo "cmdline-tools missing"
           ls -la $ANDROID_HOME/cmdline-tools/latest/bin 2>/dev/null || echo "cmdline-tools/latest missing"
           find $ANDROID_HOME -maxdepth 4 -name sdkmanager 2>/dev/null
-          $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --version 2>&1 || echo "sdkmanager run failed"
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --version 2>&1 || echo "sdkmanager run failed"
+          exit 0
 
       - name: Install Android cmdline-tools if missing
         run: |
+          set -e
           if [ ! -x "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" ]; then
             echo "cmdline-tools missing - downloading..."
             curl -fsSL -o /tmp/cmdtools.zip https://dl.google.com/android/repository/commandlinetools-linux-13114758_latest.zip
-            echo "download rc=$? size=$(stat -c%s /tmp/cmdtools.zip 2>/dev/null)"
+            echo "download ok, size: $(stat -c%s /tmp/cmdtools.zip)"
             mkdir -p "$ANDROID_HOME/cmdline-tools"
             (cd /tmp && unzip -q cmdtools.zip)
             rm -rf "$ANDROID_HOME/cmdline-tools/latest"
             mv /tmp/cmdline-tools "$ANDROID_HOME/cmdline-tools/latest"
-            chmod +x "$ANDROID_HOME/cmdline-tools/latest/bin/"* || true
+            chmod +x "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
           fi
           echo "=== verifying sdkmanager ==="
           "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --version
@@ -59,10 +63,14 @@ jobs:
 
       - name: Accept licenses + install SDK components
         run: |
+          set -e
           SDKMGR="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
           yes | "$SDKMGR" --licenses > /tmp/lic.log 2>&1 || true
+          echo "=== license tail ==="
           tail -3 /tmp/lic.log
+          echo "=== installing platforms + build-tools ==="
           "$SDKMGR" "platforms;android-37" "build-tools;35.0.0" "build-tools;36.0.0" "platform-tools"
+          echo "=== installed ==="
           "$SDKMGR" --list_installed | grep -E "platforms;android-37|build-tools;3[56]"
 
       - name: Extract source tarball
@@ -82,6 +90,7 @@ jobs:
       - name: Build debug APK
         run: |
           cd /tmp/zafiro-src
+          export PATH="$ANDROID_HOME/cmdline-tools/latest/bin:$PATH"
           sh gradlew :app:assembleDebug --no-daemon --stacktrace 2>&1 | tee build-output.log
 
       - name: Verify APK exists
