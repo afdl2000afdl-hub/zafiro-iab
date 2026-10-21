@@ -8,6 +8,9 @@ on:
 permissions:
   contents: read
 
+env:
+  ANDROID_HOME: /usr/lib/android-sdk
+
 jobs:
   build-debug-apk:
     runs-on: ubuntu-latest
@@ -28,16 +31,30 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Install Android SDK command-line tools
-        uses: android-actions/setup-android@v4
-
-      - name: Accept Android SDK licenses
+      - name: Ensure Android cmdline-tools + licenses
         run: |
-          yes | sdkmanager --licenses > /dev/null 2>&1 || true
+          set -e
+          echo "ANDROID_HOME=$ANDROID_HOME"
+          ls "$ANDROID_HOME" || true
+          # If cmdline-tools missing, the ubuntu-latest image provides sdkmanager under $ANDROID_HOME/cmdline-tools
+          if [ ! -x "$ANDROID_HOME/cmdline-tools/bin/sdkmanager" ] && [ -x "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" ]; then
+            ln -sfn latest "$ANDROID_HOME/cmdline-tools/bin" 2>/dev/null || true
+          fi
+          SDKMGR="$ANDROID_HOME/cmdline-tools/bin/sdkmanager"
+          if [ ! -x "$SDKMGR" ]; then
+            SDKMGR="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          fi
+          echo "using sdkmanager: $SDKMGR"
+          yes | "$SDKMGR" --licenses || true
+          "$SDKMGR" --list_installed | head -40 || true
 
       - name: Install required SDK components
         run: |
-          sdkmanager "platforms;android-37" "build-tools;36.0.0" "platform-tools"
+          SDKMGR="$ANDROID_HOME/cmdline-tools/bin/sdkmanager"
+          [ -x "$SDKMGR" ] || SDKMGR="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          "$SDKMGR" --list | grep -E "platforms;android-3[5-9]|build-tools;3[5-9]" || true
+          "$SDKMGR" "platforms;android-37" "build-tools;36.0.0" "platform-tools"
+          "$SDKMGR" --list_installed
 
       - name: Extract source tarball
         run: |
@@ -46,8 +63,7 @@ jobs:
           mkdir -p /tmp/zafiro-src
           tar -xzf zafiro-iab-src.tar.gz -C /tmp/zafiro-src
           ls /tmp/zafiro-src
-          echo "settings.gradle.kts present:"
-          test -f /tmp/zafiro-src/settings.gradle.kts && echo yes || { echo "MISSING settings.gradle.kts"; ls -R /tmp/zafiro-src | head -40; exit 1; }
+          test -f /tmp/zafiro-src/settings.gradle.kts && echo "settings.gradle.kts OK" || { echo "MISSING settings.gradle.kts"; ls -R /tmp/zafiro-src | head -40; exit 1; }
 
       - name: Set up Gradle cache
         uses: gradle/actions/setup-gradle@v4
@@ -57,7 +73,15 @@ jobs:
       - name: Build debug APK
         run: |
           cd /tmp/zafiro-src
-          sh gradlew :app:assembleDebug --no-daemon --stacktrace
+          sh gradlew :app:assembleDebug --no-daemon --stacktrace 2>&1 | tee build-output.log
+
+      - name: Upload build log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log
+          path: /tmp/zafiro-src/build-output.log
+          retention-days: 7
 
       - name: Verify APK exists
         run: |
