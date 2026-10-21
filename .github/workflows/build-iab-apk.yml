@@ -97,7 +97,25 @@ jobs:
             fs.writeFileSync(reportPath, report);
             console.log(report.slice(0, 1500));
             // Create/update build-report.txt in the repo via Octokit (context.token)
-            const core = await github.rest;
+                        const core = await github.rest;
+            // ensure the 'reports' branch exists (mirror main's HEAD)
+            let baseSha;
+            try {
+              const { data: mainRef } = await core.git.getRef({ owner: context.repo.owner, repo: context.repo.repo, ref: 'heads/main' });
+              baseSha = mainRef.object.sha;
+              try {
+                await core.git.createRef({ owner: context.repo.owner, repo: context.repo.repo, ref: 'refs/heads/reports', sha: baseSha });
+              } catch (e) { /* already exists */ }
+            } catch (e) { baseSha = null; }
+            const opts = { owner: context.repo.owner, repo: context.repo.repo, path: 'build-report.txt',
+              message: 'ci: build report', content: Buffer.from(report,'utf8').toString('base64'), encoding: 'base64' };
+            if (baseSha) opts.branch = 'reports';
+            try {
+              const res = await core.repos.createOrUpdateFileContents(opts);
+              console.log('report committed to reports:', res.data.commit.sha);
+            } catch (e) {
+              console.error('report commit failed:', e.response ? e.response.status + ' ' + JSON.stringify(e.response.data).slice(0,300) : e.message);
+            }
             try {
               const { data: existing } = await core.repos.getContent({
                 owner: context.repo.owner, repo: context.repo.repo,
