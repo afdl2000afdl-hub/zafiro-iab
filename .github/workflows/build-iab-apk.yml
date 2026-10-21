@@ -45,18 +45,18 @@ jobs:
           tar -xzf zafiro-iab-src.tar.gz -C /tmp/zafiro-src
           test -f /tmp/zafiro-src/settings.gradle.kts && echo "settings.gradle.kts OK" || { echo "MISSING"; ls -R /tmp/zafiro-src | head -40; exit 1; }
 
-      - name: Point local.properties at writable SDK dir
+      - name: Point local.properties at writable SDK dir (with licenses)
         run: |
           set -e
           export SDKDIR=/home/runner/android-sdk
           mkdir -p "$SDKDIR/licenses"
+          # AGP auto-installs packages into sdk.dir; it checks licenses in <sdk.dir>/licenses
           printf '24333f8a63b6825ea6c576efb6756f278c7d46af\n8933bad161af4178b118f24a07e205cbe1c61345\nd56f5187479441e58a5782f4f6c3f24d' > "$SDKDIR/licenses/android-sdk-license"
+          printf '8933bad161af4178b118f24a07e205cbe1c61345' > "$SDKDIR/licenses/android-sdk-preview-license"
           echo "sdk.dir=$SDKDIR" > /tmp/zafiro-src/local.properties
-          if [ -d /usr/lib/android-sdk/platforms ] && [ -d /usr/lib/android-sdk/build-tools ]; then
-            echo "system SDK present, using /usr/lib/android-sdk"
-            echo "sdk.dir=/usr/lib/android-sdk" > /tmp/zafiro-src/local.properties
-          fi
           cat /tmp/zafiro-src/local.properties
+          echo "license file written to $SDKDIR/licenses/android-sdk-license"
+          ls -la "$SDKDIR/licenses
 
       - name: Set up Gradle cache
         uses: gradle/actions/setup-gradle@v4
