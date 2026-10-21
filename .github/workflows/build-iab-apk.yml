@@ -1,0 +1,80 @@
+name: IAB Debug APK Build
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  build-debug-apk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Python 3.11 (Chaquopy requirement)
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Android SDK command-line tools
+        uses: android-actions/setup-android@v4
+
+      - name: Accept Android SDK licenses
+        run: |
+          yes | sdkmanager --licenses > /dev/null 2>&1 || true
+
+      - name: Install required SDK components
+        run: |
+          sdkmanager "platforms;android-37" "build-tools;36.0.0" "platform-tools"
+
+      - name: Extract source tarball
+        run: |
+          set -e
+          echo "Extracting source..."
+          tar -xzf zafiro-iab-src.tar.gz -C /tmp/zafiro-src --one-top-level 2>/dev/null || {
+            mkdir -p /tmp/zafiro-src
+            tar -xzf zafiro-iab-src.tar.gz -C /tmp/zafiro-src
+          }
+          # The tarball contents are at the top level (no wrapper dir), so they are in /tmp/zafiro-src
+          ls /tmp/zafiro-src
+          echo "settings.gradle.kts present:"; test -f /tmp/zafiro-src/settings.gradle.kts && echo yes || { echo "MISSING settings.gradle.kts"; ls -R /tmp/zafiro-src | head; exit 1; }
+
+      - name: Set up Gradle cache
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          cache-read-only: false
+
+      - name: Build debug APK
+        working-directory: /tmp/zafiro-src
+        run: |
+          sh gradlew :app:assembleDebug --no-daemon --stacktrace
+
+      - name: Verify APK exists
+        working-directory: /tmp/zafiro-src
+        run: |
+          ls -lh app/build/outputs/apk/debug/
+          test -f app/build/outputs/apk/debug/app-debug.apk && echo "APK OK"
+
+      - name: Upload debug APK as artifact
+        working-directory: /tmp/zafiro-src
+        uses: actions/upload-artifact@v4
+        with:
+          name: Zafiro-IAB-debug.apk
+          path: app/build/outputs/apk/debug/app-debug.apk
+          retention-days: 7
+
+      - name: Upload build log on failure
+        if: failure()
+        run: echo "build failed; see logs above" > build-error.log
