@@ -28,16 +28,6 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Accept Android SDK licenses
-        run: |
-          set +e
-          mkdir -p /usr/lib/android-sdk/licenses /usr/local/lib/android/sdk/licenses ~/.android
-          for L in /usr/lib/android-sdk/licenses /usr/local/lib/android/sdk/licenses ~/.android; do
-            printf '24333f8a63b6825ea6c576efb6756f278c7d46af\n8933bad161af4178b118f24a07e205cbe1c61345\nd56f5187479441e58a5782f4f6c3f24d' > "$L/android-sdk-license" 2>/dev/null
-            printf '84831e90f9f4d50b8b954f371a5b57f391ab3774' > "$L/android-sdk-preview-license" 2>/dev/null
-          done
-          exit 0
-
       - name: Extract source tarball
         run: |
           set -e
@@ -45,18 +35,17 @@ jobs:
           tar -xzf zafiro-iab-src.tar.gz -C /tmp/zafiro-src
           test -f /tmp/zafiro-src/settings.gradle.kts && echo "settings.gradle.kts OK" || { echo "MISSING"; ls -R /tmp/zafiro-src | head -40; exit 1; }
 
-      - name: Point local.properties at writable SDK dir (with licenses)
+      - name: Set up Android SDK + licenses
         run: |
           set -e
           export SDKDIR=/home/runner/android-sdk
           mkdir -p "$SDKDIR/licenses"
-          # AGP auto-installs packages into sdk.dir; it checks licenses in <sdk.dir>/licenses
           printf '24333f8a63b6825ea6c576efb6756f278c7d46af\n8933bad161af4178b118f24a07e205cbe1c61345\nd56f5187479441e58a5782f4f6c3f24d' > "$SDKDIR/licenses/android-sdk-license"
           printf '8933bad161af4178b118f24a07e205cbe1c61345' > "$SDKDIR/licenses/android-sdk-preview-license"
           echo "sdk.dir=$SDKDIR" > /tmp/zafiro-src/local.properties
           cat /tmp/zafiro-src/local.properties
-          echo "license file written to $SDKDIR/licenses/android-sdk-license"
-          ls -la "$SDKDIR/licenses
+          echo "licenses written to $SDKDIR/licenses"
+          ls -la "$SDKDIR/licenses"
 
       - name: Set up Gradle cache
         uses: gradle/actions/setup-gradle@v4
@@ -69,88 +58,36 @@ jobs:
           cd /tmp/zafiro-src
           sh gradlew :app:assembleDebug --no-daemon --stacktrace 2>&1 | tee build-output.log
 
-      - name: Publish report to repo
-        if: always()
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const fs = require('fs');
-            const path = require('path');
-            const src = '/tmp/zafiro-src';
-            const reportPath = path.join(process.env.GITHUB_WORKSPACE, 'build-report.txt');
-            let apkFind = '';
-            let outputsDir = '';
-            let gradleTail = '';
-            try {
-              const { execSync } = require('child_process');
-              apkFind = execSync(`find ${src}/app/build -name "*.apk" 2>/dev/null || echo "NO APK under app/build"`, { shell: 'bash' }).toString();
-              outputsDir = execSync(`ls -lR ${src}/app/build/outputs 2>/dev/null | head -80 || echo "no outputs dir"`, { shell: 'bash' }).toString();
-              gradleTail = fs.existsSync(`${src}/build-output.log`)
-                ? fs.readFileSync(`${src}/build-output.log`, 'utf8').split('\n').slice(-120).join('\n')
-                : 'no log';
-            } catch (e) {
-              gradleTail += '\nreport-step-error: ' + e.message;
-            }
-            const report = '=== apk find ===\n' + apkFind +
-                           '\n=== outputs dir ===\n' + outputsDir +
-                           '\n=== gradle tail (last 120 lines) ===\n' + gradleTail + '\n';
-            fs.writeFileSync(reportPath, report);
-            console.log(report.slice(0, 1500));
-            // Create/update build-report.txt in the repo via Octokit (context.token)
-                        const core = await github.rest;
-            // ensure the 'reports' branch exists (mirror main's HEAD)
-            let baseSha;
-            try {
-              const { data: mainRef } = await core.git.getRef({ owner: context.repo.owner, repo: context.repo.repo, ref: 'heads/main' });
-              baseSha = mainRef.object.sha;
-              try {
-                await core.git.createRef({ owner: context.repo.owner, repo: context.repo.repo, ref: 'refs/heads/reports', sha: baseSha });
-              } catch (e) { /* already exists */ }
-            } catch (e) { baseSha = null; }
-            const opts = { owner: context.repo.owner, repo: context.repo.repo, path: 'build-report.txt',
-              message: 'ci: build report', content: Buffer.from(report,'utf8').toString('base64'), encoding: 'base64' };
-            if (baseSha) opts.branch = 'reports';
-            try {
-              const res = await core.repos.createOrUpdateFileContents(opts);
-              console.log('report committed to reports:', res.data.commit.sha);
-            } catch (e) {
-              console.error('report commit failed:', e.response ? e.response.status + ' ' + JSON.stringify(e.response.data).slice(0,300) : e.message);
-            }
-            try {
-              const { data: existing } = await core.repos.getContent({
-                owner: context.repo.owner, repo: context.repo.repo,
-                path: 'build-report.txt',
-              });
-              const res = await core.repos.createOrUpdateFileContents({
-                owner: context.repo.owner, repo: context.repo.repo,
-                path: 'build-report.txt',
-                message: 'ci: build report',
-                content: Buffer.from(report, 'utf8').toString('base64'),
-                encoding: 'base64',
-                sha: existing.sha,
-              });
-              console.log('report committed:', res.data.commit.sha);
-            } catch (e) {
-              // if 404 (no existing), create without sha
-              if (e.response && e.response.status === 404) {
-                const res = await core.repos.createOrUpdateFileContents({
-                  owner: context.repo.owner, repo: context.repo.repo,
-                  path: 'build-report.txt',
-                  message: 'ci: build report',
-                  content: Buffer.from(report, 'utf8').toString('base64'),
-                  encoding: 'base64',
-                });
-                console.log('report created:', res.data.commit.sha);
-              } else {
-                console.error('report commit failed:', e.response ? e.response.status : e.message);
-              }
-            }
+      - name: Locate APK
+        run: |
+          set -e
+          cd /tmp/zafiro-src
+          echo "=== apk find ==="
+          find app/build -name "*.apk" 2>/dev/null || echo "NO APK under app/build"
+          APK="$(find app/build -name '*.apk' 2>/dev/null | head -1)"
+          if [ -n "$APK" ]; then
+            echo "APK found: $APK"
+            mkdir -p "$GITHUB_WORKSPACE/out"
+            cp "$APK" "$GITHUB_WORKSPACE/out/zafiro-debug.apk"
+            echo "APK staged"
+          else
+            echo "APK_NOT_FOUND"
+            tail -80 build-output.log
+            exit 1
+          fi
 
-      - name: Upload build log artifact
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Zafiro-IAB-debug
+          path: out/
+          retention-days: 7
+
+      - name: Upload build log
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: build-log
           path: /tmp/zafiro-src/build-output.log
-          retention-days: 7
+          retention-days: 3
           if-no-files-found: warn
