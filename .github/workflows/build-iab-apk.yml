@@ -43,7 +43,7 @@ jobs:
           set -e
           mkdir -p /tmp/zafiro-src
           tar -xzf zafiro-iab-src.tar.gz -C /tmp/zafiro-src
-          test -f /tmp/zafiro-src/settings.gradle.kts && echo "settings.gradle.kts OK" || { echo "MISSING settings.gradle.kts"; ls -R /tmp/zafiro-src | head -40; exit 1; }
+          test -f /tmp/zafiro-src/settings.gradle.kts && echo "settings.gradle.kts OK" || { echo "MISSING"; ls -R /tmp/zafiro-src | head -40; exit 1; }
 
       - name: Point local.properties at writable SDK dir
         run: |
@@ -68,38 +68,30 @@ jobs:
           cd /tmp/zafiro-src
           sh gradlew :app:assembleDebug --no-daemon --stacktrace 2>&1 | tee build-output.log
 
-      - name: Locate and stage APK
+      - name: Stage APK + copy build log to workspace
         run: |
           set -e
           cd /tmp/zafiro-src
-          echo "=== all APKs under app/build ==="
+          echo "=== APK search ==="
           find app/build -name "*.apk" 2>/dev/null || echo "no apks under app/build"
-          echo "=== app/build/outputs ==="
           ls -lR app/build/outputs 2>/dev/null || echo "no outputs dir"
-          mkdir -p "$GITHUB_WORKSPACE/out"
-          APK="$(find app/build -name '*.apk' 2>/dev/null | head -1)"
-          echo "APK found: ${APK:-<none>}"
-          if [ -n "$APK" ]; then
-            cp "$APK" "$GITHUB_WORKSPACE/out/zafiro-debug.apk"
-            echo "APK staged to out/zafiro-debug.apk"
-          else
-            echo "APK_NOT_FOUND"
-          fi
+          # Copy everything we care about into the workspace for artifact pickup
+          mkdir -p "$GITHUB_WORKSPACE/stage"
+          # build log
+          cp build-output.log "$GITHUB_WORKSPACE/stage/build-output.log" 2>/dev/null || true
+          # any apk anywhere under app/build
+          while IFS= read -r APK; do
+            echo "staging $APK"
+            cp "$APK" "$GITHUB_WORKSPACE/stage/"
+          done < <(find app/build -name "*.apk" 2>/dev/null)
+          echo "=== staged files ==="
+          ls -lh "$GITHUB_WORKSPACE/stage/"
 
-      - name: Upload debug APK as artifact
+      - name: Upload artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: Zafiro-IAB-debug
-          path: out/
+          name: zafiro-iab-build
+          path: stage/
           retention-days: 7
-          if-no-files-found: warn
-
-      - name: Upload build log
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: build-log
-          path: /tmp/zafiro-src/build-output.log
-          retention-days: 3
           if-no-files-found: warn
