@@ -65,11 +65,11 @@ jobs:
 
       - name: Build debug APK
         run: |
+          set -o pipefail
           cd /tmp/zafiro-src
           sh gradlew :app:assembleDebug --no-daemon --stacktrace 2>&1 | tee build-output.log
-          echo "GRADLE_EXIT=${PIPESTATUS[0]}"
 
-      - name: Publish report to repo (readable via contents API)
+      - name: Publish report to repo
         if: always()
         run: |
           set +e
@@ -79,27 +79,30 @@ jobs:
             echo "=== apk find ==="
             find app/build -name "*.apk" 2>/dev/null || echo "NO APK under app/build"
             echo "=== outputs dir ==="
-            ls -lR app/build/outputs 2>/dev/null | head -60 || echo "no outputs dir"
-            echo "=== gradle exit / tail ==="
-            tail -80 build-output.log 2>/dev/null || echo "no log"
+            ls -lR app/build/outputs 2>/dev/null | head -80 || echo "no outputs dir"
+            echo "=== gradle tail (last 120 lines) ==="
+            tail -120 build-output.log 2>/dev/null || echo "no log"
           } > "$REPORT"
-          # Push via the contents API using the workflow's own GITHUB_TOKEN
+          echo "=== report preview ==="
+          head -30 "$REPORT"
+
           TOKEN="$GITHUB_TOKEN"
           REPO="afdl2000afdl-hub/zafiro-iab"
           B64="$(base64 -w0 "$REPORT")"
-          # get current sha if exists (ignore 404)
           SHA="$(curl -s -H "Authorization: token $TOKEN" -H "Accept: application/vnd.github+json" \
                 "https://api.github.com/repos/$REPO/contents/build-report.txt" \
-                | grep -o '"sha":"[^"]*"' | cut -d'"' -f4)"
+                | grep -o '"sha":"[^"]*"' | head -1 | cut -d'"' -f4)"
           if [ -n "$SHA" ]; then
-            BODY="{"message":"ci: build report","content":"$B64","encoding":"base64","sha":"$SHA"}"
+            printf '{"message":"ci: build report","content":"%s","encoding":"base64","sha":"%s"}' "$B64" "$SHA" > /tmp/report.json
           else
-            BODY="{"message":"ci: build report","content":"$B64","encoding":"base64"}"
+            printf '{"message":"ci: build report","content":"%s","encoding":"base64"}' "$B64" > /tmp/report.json
           fi
           curl -s -X PUT -H "Authorization: token $TOKEN" -H "Content-Type: application/json" \
-               -d "$BODY" \
-               "https://api.github.com/repos/$REPO/contents/build-report.txt" -o /dev/null -w "put_report_http=%{http_code}\n"
-          echo "report written to $REPORT"
+               --data-binary @/tmp/report.json \
+               "https://api.github.com/repos/$REPO/contents/build-report.txt" \
+               -o /tmp/put.json -w "put_report_http=%{http_code}\n"
+          echo "--- put response ---"
+          head -c 300 /tmp/put.json; echo
 
       - name: Upload build log artifact
         if: always()
