@@ -69,36 +69,43 @@ jobs:
           sh gradlew :app:assembleDebug --no-daemon --stacktrace 2>&1 | tee build-output.log
           echo "GRADLE_EXIT=${PIPESTATUS[0]}"
 
-      - name: Report build result to repo (readable via contents API)
+      - name: Publish report to repo (readable via contents API)
         if: always()
         run: |
           set +e
           cd /tmp/zafiro-src
           REPORT="$GITHUB_WORKSPACE/build-report.txt"
           {
-            echo "=== find apk ==="
+            echo "=== apk find ==="
             find app/build -name "*.apk" 2>/dev/null || echo "NO APK under app/build"
             echo "=== outputs dir ==="
-            ls -lR app/build/outputs 2>/dev/null || echo "no outputs dir"
-            echo "=== gradle tail (last 60 lines) ==="
-            tail -60 build-output.log 2>/dev/null || echo "no build-output.log"
+            ls -lR app/build/outputs 2>/dev/null | head -60 || echo "no outputs dir"
+            echo "=== gradle exit / tail ==="
+            tail -80 build-output.log 2>/dev/null || echo "no log"
           } > "$REPORT"
-          echo "=== report content ==="
-          cat "$REPORT"
-          # Commit it back to the repo so it can be read via contents API
-          git config user.email "build@zafiro"
-          git config user.name "zafiro-ci"
-          git add -f "$REPORT" 2>/dev/null || cp "$REPORT" build-report.txt
-          cp "$REPORT" build-report.txt
-          git add build-report.txt
-          git commit -m "ci: build report" -q
-          git push origin HEAD:main -q 2>&1 || echo "push failed (may be rate/perm)"
+          # Push via the contents API using the workflow's own GITHUB_TOKEN
+          TOKEN="$GITHUB_TOKEN"
+          REPO="afdl2000afdl-hub/zafiro-iab"
+          B64="$(base64 -w0 "$REPORT")"
+          # get current sha if exists (ignore 404)
+          SHA="$(curl -s -H "Authorization: token $TOKEN" -H "Accept: application/vnd.github+json" \
+                "https://api.github.com/repos/$REPO/contents/build-report.txt" \
+                | grep -o '"sha":"[^"]*"' | cut -d'"' -f4)"
+          if [ -n "$SHA" ]; then
+            BODY="{"message":"ci: build report","content":"$B64","encoding":"base64","sha":"$SHA"}"
+          else
+            BODY="{"message":"ci: build report","content":"$B64","encoding":"base64"}"
+          fi
+          curl -s -X PUT -H "Authorization: token $TOKEN" -H "Content-Type: application/json" \
+               -d "$BODY" \
+               "https://api.github.com/repos/$REPO/contents/build-report.txt" -o /dev/null -w "put_report_http=%{http_code}\n"
+          echo "report written to $REPORT"
 
-      - name: Upload artifacts
+      - name: Upload build log artifact
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: zafiro-iab-build
+          name: build-log
           path: /tmp/zafiro-src/build-output.log
           retention-days: 7
           if-no-files-found: warn
