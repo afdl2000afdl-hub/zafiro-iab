@@ -64,7 +64,7 @@ jobs:
           # 2) Accept ALL licenses properly (generates correct hashes into $SDKDIR/licenses)
           yes | "$SDKMGR" --sdk_root="$SDKDIR" --licenses || true
           # 3) Install the exact packages AGP 9.1.1 needs
-          "$SDKMGR" --sdk_root="$SDKDIR" "platforms;android-37.0" "build-tools;36.0.0" "platform-tools"
+          "$SDKMGR" --sdk_root="$SDKDIR" "platforms;android-36" "platforms;android-37.0" "build-tools;36.0.0" "build-tools;35.0.0" "platform-tools"
           "$SDKMGR" --sdk_root="$SDKDIR" --list_installed
           # 4) Point the build at this SDK
           echo "sdk.dir=$SDKDIR" > /tmp/zafiro-src/local.properties
