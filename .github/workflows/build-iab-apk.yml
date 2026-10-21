@@ -35,17 +35,40 @@ jobs:
           tar -xzf zafiro-iab-src.tar.gz -C /tmp/zafiro-src
           test -f /tmp/zafiro-src/settings.gradle.kts && echo "settings.gradle.kts OK" || { echo "MISSING"; ls -R /tmp/zafiro-src | head -40; exit 1; }
 
-      - name: Set up Android SDK + licenses
+      - name: Set up Android SDK (cmdline-tools + licenses + packages)
         run: |
           set -e
           export SDKDIR=/home/runner/android-sdk
-          mkdir -p "$SDKDIR/licenses"
-          printf '24333f8a63b6825ea6c576efb6756f278c7d46af\n8933bad161af4178b118f24a07e205cbe1c61345\nd56f5187479441e58a5782f4f6c3f24d' > "$SDKDIR/licenses/android-sdk-license"
-          printf '8933bad161af4178b118f24a07e205cbe1c61345' > "$SDKDIR/licenses/android-sdk-preview-license"
+          mkdir -p "$SDKDIR/cmdline-tools"
+          # 1) Obtain sdkmanager: try existing system path first, else download
+          SDKMGR=""
+          if [ -x /usr/lib/android-sdk/cmdline-tools/latest/bin/sdkmanager ]; then
+            SDKMGR=/usr/lib/android-sdk/cmdline-tools/latest/bin/sdkmanager
+            echo "using system sdkmanager"
+          else
+            echo "downloading cmdline-tools"
+            for VER in 13114758 12700977 11076708 10406320 9477386; do
+              if curl -fsSL "https://dl.google.com/android/repository/commandlinetools-linux-${VER}_latest.zip" -o /tmp/cmdtools.zip; then
+                echo "downloaded version $VER"
+                break
+              fi
+            done
+            test -s /tmp/cmdtools.zip || { echo "cmdline-tools download FAILED for all versions"; exit 1; }
+            cd /tmp && unzip -q cmdtools.zip
+            rm -rf "$SDKDIR/cmdline-tools/latest"
+            mv /tmp/cmdline-tools "$SDKDIR/cmdline-tools/latest"
+            chmod +x "$SDKDIR/cmdline-tools/latest/bin/sdkmanager"
+            SDKMGR="$SDKDIR/cmdline-tools/latest/bin/sdkmanager"
+          fi
+          echo "sdkmanager: $SDKMGR"
+          # 2) Accept ALL licenses properly (generates correct hashes into $SDKDIR/licenses)
+          yes | "$SDKMGR" --sdk_root="$SDKDIR" --licenses || true
+          # 3) Install the exact packages AGP 9.1.1 needs
+          "$SDKMGR" --sdk_root="$SDKDIR" "platforms;android-37.0" "build-tools;36.0.0" "platform-tools"
+          "$SDKMGR" --sdk_root="$SDKDIR" --list_installed
+          # 4) Point the build at this SDK
           echo "sdk.dir=$SDKDIR" > /tmp/zafiro-src/local.properties
           cat /tmp/zafiro-src/local.properties
-          echo "licenses written to $SDKDIR/licenses"
-          ls -la "$SDKDIR/licenses"
 
       - name: Set up Gradle cache
         uses: gradle/actions/setup-gradle@v4
